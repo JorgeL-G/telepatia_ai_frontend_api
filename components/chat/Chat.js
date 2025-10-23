@@ -148,7 +148,33 @@ export default function Chat() {
     
     try {
       const formData = new FormData();
-      formData.append('audio_file', audioBlob, 'audio.mp3');
+      
+      // Determinar la extensión correcta basada en el tipo MIME del blob
+      // Formatos soportados por el backend: .wav, .mp3, .flac, .m4a, .ogg
+      let extension = 'wav'; // Por defecto, formato más compatible
+      if (audioBlob.type.includes('wav')) {
+        extension = 'wav';
+      } else if (audioBlob.type.includes('mp4')) {
+        extension = 'm4a'; // MP4 audio se envía como .m4a
+      } else if (audioBlob.type.includes('ogg')) {
+        extension = 'ogg';
+      } else if (audioBlob.type.includes('mp3')) {
+        extension = 'mp3';
+      } else if (audioBlob.type.includes('flac')) {
+        extension = 'flac';
+      } else {
+        console.warn('Formato de audio no soportado por el backend:', audioBlob.type);
+        extension = 'wav'; // Fallback a WAV
+      }
+      
+      const filename = `audio.${extension}`;
+      formData.append('audio_file', audioBlob, filename);
+
+      console.log('Sending audio file:', {
+        size: audioBlob.size,
+        type: audioBlob.type,
+        filename: filename
+      });
 
       const response = await fetch(
         'http://0.0.0.0:8000/message/validate-process-audio',
@@ -266,23 +292,86 @@ export default function Chat() {
     if (isLoading || isRecording) return;
 
     console.log('Starting recording...');
+    
+    // Verificar formatos soportados por el navegador
+    const supportedFormats = [
+      'audio/wav',
+      'audio/mp4',
+      'audio/ogg;codecs=opus',
+      'audio/ogg',
+      'audio/mp3'
+    ];
+    
+    console.log('Formatos soportados por el navegador:');
+    supportedFormats.forEach(format => {
+      console.log(`${format}: ${MediaRecorder.isTypeSupported(format)}`);
+    });
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      const chunks = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 44100
+        } 
+      });
+      
+      // Configurar opciones del MediaRecorder con formatos soportados por el backend
+      // Formatos permitidos: .wav, .mp3, .flac, .m4a, .ogg
+      let options = {};
+      if (MediaRecorder.isTypeSupported('audio/wav')) {
+        options = { mimeType: 'audio/wav' };
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        options = { mimeType: 'audio/mp4' }; // .m4a
+      } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+        options = { mimeType: 'audio/ogg;codecs=opus' }; // .ogg
+      } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+        options = { mimeType: 'audio/ogg' }; // .ogg
+      } else if (MediaRecorder.isTypeSupported('audio/mp3')) {
+        options = { mimeType: 'audio/mp3' }; // .mp3
+      } else {
+        // Fallback: usar el formato por defecto del navegador
+        console.warn('No se encontró un formato soportado por el backend, usando formato por defecto');
+      }
+      
+      const recorder = new MediaRecorder(stream, options);
+      console.log('MediaRecorder configured with:', options);
+      
+      // Usar el estado para almacenar los chunks
+      setAudioChunks([]);
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          chunks.push(event.data);
+          console.log('Audio chunk received:', event.data.size, 'bytes');
+          setAudioChunks(prev => [...prev, event.data]);
         }
       };
 
       recorder.onstop = () => {
-        console.log('Recording stopped, saving audio...');
-        const audioBlob = new Blob(chunks, { type: 'audio/webm' });
-        setAudioBlob(audioBlob);
+        console.log('Recording stopped, processing audio...');
         stream.getTracks().forEach((track) => track.stop());
+        
+        // Procesar el audio después de un pequeño delay para asegurar que todos los chunks estén disponibles
+        setTimeout(() => {
+          setAudioChunks(currentChunks => {
+            if (currentChunks.length > 0) {
+              // Usar el tipo MIME del recorder para crear el blob
+              // Fallback a WAV si no hay tipo MIME válido
+              const mimeType = recorder.mimeType || 'audio/wav';
+              const audioBlob = new Blob(currentChunks, { type: mimeType });
+              console.log('Audio blob created:', {
+                size: audioBlob.size,
+                type: audioBlob.type,
+                chunks: currentChunks.length
+              });
+              setAudioBlob(audioBlob);
+            } else {
+              console.log('No audio chunks available');
+            }
+            return currentChunks; // Mantener el estado para evitar re-renders innecesarios
+          });
+        }, 100);
       };
 
       recorder.start();
@@ -306,22 +395,45 @@ export default function Chat() {
     if (!mediaRecorder || !isRecording) return;
 
     console.log('Stopping recording...');
+    
+    // Solo detener el recorder, no cambiar el estado aún
     mediaRecorder.stop();
-    setIsRecording(false);
-    setMediaRecorder(null);
+    
+    // Cambiar el estado después de un pequeño delay para asegurar que onstop se ejecute
+    setTimeout(() => {
+      setIsRecording(false);
+      setMediaRecorder(null);
+    }, 200);
   };
 
   // Process audio after stopping recording
   const processRecordedAudio = useCallback(
     async (audioBlob) => {
+      console.log('processRecordedAudio called with:', {
+        size: audioBlob.size,
+        type: audioBlob.type,
+        isRecording,
+        isLoading
+      });
+
       // Check that audio has content
       if (audioBlob.size === 0) {
         console.log('No audio recorded, canceling processing');
+        const errorMessage = {
+          id: generateId(),
+          tipo: 'error',
+          contenido: 'No se grabó ningún audio. Por favor, intenta de nuevo.',
+          timestamp: new Date().toLocaleTimeString('es-ES', {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+        };
+        setMessages((prev) => [...prev, errorMessage]);
         setIsLoading(false);
         return;
       }
 
-      console.log('Processing recorded audio, size:', audioBlob.size);
+      console.log('Processing recorded audio, size:', audioBlob.size, 'type:', audioBlob.type);
       setIsLoading(true);
 
       // Show voice message in chat
@@ -402,12 +514,13 @@ export default function Chat() {
         setIsLoading(false);
       }
     },
-    [generateId, validateAudio, generateText, formatJsonResponse]
+    [generateId, validateAudio, generateText, formatJsonResponse, isRecording, isLoading]
   );
 
   // Process audio when recording stops
   useEffect(() => {
-    if (audioBlob && !isRecording) {
+    if (audioBlob && !isRecording && audioBlob.size > 0) {
+      console.log('Processing audio blob:', audioBlob.size, 'bytes');
       processRecordedAudio(audioBlob);
       setAudioBlob(null);
     }
@@ -426,7 +539,7 @@ export default function Chat() {
       <div className={styles.header}>
         <h2 className={styles.title}>Chat de Telepatía AI</h2>
         <p className={styles.subtitle}>
-          Envía mensajes de texto o graba tu voz
+          Envía mensajes de texto o graba tu voz. Te responderemos en texto y en un formato JSON.
         </p>
       </div>
 
