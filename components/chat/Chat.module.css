@@ -88,9 +88,50 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
 
+/* Error message styles */
+.messageError .messageContent {
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+  color: #dc2626;
+  border-radius: 20px 20px 20px 6px;
+  border: 1px solid #fecaca;
+  box-shadow: 0 2px 8px rgba(220, 38, 38, 0.1);
+}
+
+.errorMessage {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.errorIcon {
+  font-size: 0.9rem;
+  margin-top: 0.1rem;
+  flex-shrink: 0;
+}
+
 .messageText {
   margin: 0 0 0.25rem 0;
   line-height: 1.4;
+}
+
+/* JSON formatting styles */
+.jsonMessage {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.85rem;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 0.5rem 0;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  color: #495057;
+  line-height: 1.5;
+}
+
+.messageBot .jsonMessage {
+  background: #f8f9fa;
+  border-color: #e9ecef;
 }
 
 .voiceMessage {

@@ -28,40 +28,151 @@ export default function Chat() {
     return Date.now().toString(36) + Math.random().toString(36).substr(2);
   }, []);
 
+  // Format JSON response for better readability
+  const formatJsonResponse = useCallback((jsonString) => {
+    try {
+      // First, try to parse the JSON string
+      const parsed = JSON.parse(jsonString);
+      
+      // If it's an object or array, format it nicely
+      if (typeof parsed === 'object' && parsed !== null) {
+        return JSON.stringify(parsed, null, 2);
+      }
+      
+      // If it's a primitive value, return as is
+      return String(parsed);
+    } catch (error) {
+      // If it's not valid JSON, check if it looks like JSON
+      const trimmed = jsonString.trim();
+      
+      // Check if it starts and ends with JSON-like characters
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || 
+          (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try {
+          // Try to fix common JSON issues
+          const fixed = trimmed
+            .replace(/'/g, '"')  // Replace single quotes with double quotes
+            .replace(/(\w+):/g, '"$1":')  // Add quotes around keys
+            .replace(/:\s*([^",{\[\]]+)([,}])/g, ': "$1"$2');  // Add quotes around string values
+          
+          const parsed = JSON.parse(fixed);
+          return JSON.stringify(parsed, null, 2);
+        } catch (fixError) {
+          console.log('Could not fix JSON, returning original:', fixError);
+          return jsonString;
+        }
+      }
+      
+      // If it doesn't look like JSON, return as is
+      console.log('Response is not valid JSON, returning as is:', error);
+      return jsonString;
+    }
+  }, []);
+
+  // Check if content is JSON formatted
+  const isJsonFormatted = useCallback((content) => {
+    try {
+      JSON.parse(content);
+      return true;
+    } catch {
+      // Check if it looks like JSON even if it's not valid
+      const trimmed = content.trim();
+      return (trimmed.startsWith('{') && trimmed.endsWith('}')) || 
+             (trimmed.startsWith('[') && trimmed.endsWith(']'));
+    }
+  }, []);
+
   // API functions
   const validateText = useCallback(async (text) => {
-    const response = await fetch(
-      'http://0.0.0.0:8000/message/validate-process-text',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos timeout
+    
+    try {
+      const response = await fetch(
+        'http://0.0.0.0:8000/message/validate-process-text',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+          signal: controller.signal,
+        }
+      );
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
-    );
-    return await response.json();
+      
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error('La validación tardó demasiado tiempo. Por favor, intenta de nuevo.');
+      }
+      throw error;
+    }
   }, []);
 
   const generateText = useCallback(async (validateText) => {
-    const response = await fetch('http://0.0.0.0:8000/message/generate-text', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: validateText }),
-    });
-    return await response.json();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 segundos timeout
+    
+    try {
+      const response = await fetch('http://0.0.0.0:8000/message/generate-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: validateText }),
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error('La generación tardó demasiado tiempo. Por favor, intenta de nuevo.');
+      }
+      throw error;
+    }
   }, []);
 
   const validateAudio = useCallback(async (audioBlob) => {
-    const formData = new FormData();
-    formData.append('audio_file', audioBlob, 'audio.mp3');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 segundos timeout para audio
+    
+    try {
+      const formData = new FormData();
+      formData.append('audio_file', audioBlob, 'audio.mp3');
 
-    const response = await fetch(
-      'http://0.0.0.0:8000/message/validate-process-audio',
-      {
-        method: 'POST',
-        body: formData, // Don't include Content-Type, browser sets it automatically
+      const response = await fetch(
+        'http://0.0.0.0:8000/message/validate-process-audio',
+        {
+          method: 'POST',
+          body: formData,
+          signal: controller.signal,
+        }
+      );
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
-    );
-    return await response.json();
+      
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error('El procesamiento de audio tardó demasiado tiempo. Por favor, intenta de nuevo.');
+      }
+      throw error;
+    }
   }, []);
 
   // Send text message
@@ -95,11 +206,15 @@ export default function Chat() {
           validationResponse.validate_text
         );
 
+        console.log('Raw response from generate-text:', generationResponse);
+        console.log('generated_text content:', generationResponse.generated_text);
+        console.log('Type of generated_text:', typeof generationResponse.generated_text);
+
         // Add bot response to chat
         const botMessage = {
           id: generateId(),
           tipo: 'bot',
-          contenido: generationResponse.generated_text,
+          contenido: formatJsonResponse(generationResponse.generated_text),
           timestamp: new Date().toLocaleTimeString('es-ES', {
             hour: '2-digit',
             minute: '2-digit',
@@ -108,12 +223,31 @@ export default function Chat() {
 
         setMessages((prev) => [...prev, botMessage]);
       } else {
-        // Show error if validation fails
-        alert(`Error: ${validationResponse.message}`);
+        // Show error message in chat
+        const errorMessage = {
+          id: generateId(),
+          tipo: 'error',
+          contenido: `Error: ${validationResponse.message}`,
+          timestamp: new Date().toLocaleTimeString('es-ES', {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+        };
+        setMessages((prev) => [...prev, errorMessage]);
       }
     } catch (error) {
       console.error('Error processing message:', error);
-      alert('Error al enviar el mensaje. Por favor, intenta de nuevo.');
+      // Show error message in chat
+      const errorMessage = {
+        id: generateId(),
+        tipo: 'error',
+        contenido: 'Error al enviar el mensaje. Por favor, intenta de nuevo.',
+        timestamp: new Date().toLocaleTimeString('es-ES', {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
@@ -230,7 +364,7 @@ export default function Chat() {
           const botMessage = {
             id: generateId(),
             tipo: 'bot',
-            contenido: generationResponse.generated_text,
+            contenido: formatJsonResponse(generationResponse.generated_text),
             timestamp: new Date().toLocaleTimeString('es-ES', {
               hour: '2-digit',
               minute: '2-digit',
@@ -239,17 +373,36 @@ export default function Chat() {
 
           setMessages((prev) => [...prev, botMessage]);
         } else {
-          // Show error if validation fails
-          alert(`Error: ${validationResponse.message}`);
+          // Show error message in chat
+          const errorMessage = {
+            id: generateId(),
+            tipo: 'error',
+            contenido: `Error: ${validationResponse.message}`,
+            timestamp: new Date().toLocaleTimeString('es-ES', {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+          };
+          setMessages((prev) => [...prev, errorMessage]);
         }
       } catch (error) {
         console.error('Error processing audio:', error);
-        alert('Error al procesar el audio. Por favor, intenta de nuevo.');
+        // Show error message in chat
+        const errorMessage = {
+          id: generateId(),
+          tipo: 'error',
+          contenido: 'Error al procesar el audio. Por favor, intenta de nuevo.',
+          timestamp: new Date().toLocaleTimeString('es-ES', {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+        };
+        setMessages((prev) => [...prev, errorMessage]);
       } finally {
         setIsLoading(false);
       }
     },
-    [generateId, validateAudio, generateText]
+    [generateId, validateAudio, generateText, formatJsonResponse]
   );
 
   // Process audio when recording stops
@@ -290,13 +443,22 @@ export default function Chat() {
                 key={mensaje.id}
                 className={`${styles.message} ${
                   mensaje.tipo === 'bot' ? styles.messageBot : ''
-                }`}
+                } ${mensaje.tipo === 'error' ? styles.messageError : ''}`}
               >
                 <div className={styles.messageContent}>
                   {mensaje.tipo === 'texto' ? (
                     <p className={styles.messageText}>{mensaje.contenido}</p>
                   ) : mensaje.tipo === 'bot' ? (
-                    <p className={styles.messageText}>{mensaje.contenido}</p>
+                    isJsonFormatted(mensaje.contenido) ? (
+                      <pre className={styles.jsonMessage}>{mensaje.contenido}</pre>
+                    ) : (
+                      <p className={styles.messageText}>{mensaje.contenido}</p>
+                    )
+                  ) : mensaje.tipo === 'error' ? (
+                    <div className={styles.errorMessage}>
+                      <span className={styles.errorIcon}>⚠️</span>
+                      <p className={styles.messageText}>{mensaje.contenido}</p>
+                    </div>
                   ) : mensaje.tipo === 'transcripcion' ? (
                     <div className={styles.transcriptionMessage}>
                       <span className={styles.transcriptionIndicator}>🎤</span>
@@ -375,8 +537,9 @@ export default function Chat() {
               className={styles.sendButton}
               onClick={handleSendText}
               disabled={!inputText.trim() || isLoading}
+              title={isLoading ? 'Procesando...' : `Enviar mensaje`}
             >
-              📤
+              {isLoading ? '⏳' : '📤'}
             </button>
           </div>
         </div>
